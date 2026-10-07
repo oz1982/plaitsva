@@ -1,0 +1,69 @@
+name: Build NTS-1 unit
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  PROJ: plaitsva
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install ARM toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libnewlib-arm-none-eabi make zip
+
+      - name: Get logue SDK
+        run: git clone --depth 1 --recursive https://github.com/korginc/logue-sdk.git sdk
+
+      - name: Link toolchain where the SDK expects it
+        run: |
+          T=sdk/tools/gcc/gcc-arm-none-eabi-5_4-2016q3
+          mkdir -p "$T"
+          ln -s /usr/bin "$T/bin"
+          ln -s /usr/lib/arm-none-eabi "$T/arm-none-eabi"
+
+      - name: Prepare project
+        run: |
+          DEST=sdk/platform/nutekt-digital/$PROJ
+          rm -rf "$DEST"
+          cp -r sdk/platform/nutekt-digital/dummy-osc "$DEST"
+          cp $PROJ/osc.cpp "$DEST"/osc.cpp
+          cp $PROJ/manifest.json "$DEST"/manifest.json
+          printf 'PROJECT := %s\nPROJECT_TYPE := oscillator\n\nUCSRC =\nUCXXSRC = osc.cpp\nUINCDIR =\nUDEFS =\nULIB =\nULIBDIR =\n' "$PROJ" > "$DEST"/project.mk
+
+      - name: Build
+        run: make -C sdk/platform/nutekt-digital/$PROJ
+
+      - name: Package unit
+        run: |
+          D=sdk/platform/nutekt-digital/$PROJ
+          ls -la "$D/build/obj" "$D/build"
+          make -C "$D" install || echo "pas de cible install"
+          mkdir -p out
+          find sdk -name "*.ntkdigunit" -exec cp {} out/ \;
+          if [ -z "$(ls out)" ]; then
+            echo "Packaging manuel"
+            mkdir -p pkg/$PROJ
+            cp "$D/manifest.json" pkg/$PROJ/manifest.json
+            cp "$D/build/$PROJ.bin" pkg/$PROJ/payload.bin
+            (cd pkg/$PROJ && zip -r9 ../../out/$PROJ.ntkdigunit manifest.json payload.bin)
+          fi
+          ls -la out
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.PROJ }}-build
+          path: |
+            out/
+            sdk/platform/nutekt-digital/${{ env.PROJ }}/build/*.bin
+            sdk/platform/nutekt-digital/${{ env.PROJ }}/build/*.map
+          if-no-files-found: warn
